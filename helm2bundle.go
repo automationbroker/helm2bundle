@@ -20,26 +20,89 @@ description: {{.Description}}
 bindable: False
 async: optional
 metadata:
-  displayName: {{.Name}}-helm
-  imageURL: {{.ImageURL}}
+  displayName: {{.Name}} (helm bundle)
+  console.openshift.io/iconClass: icon-{{.Name}}
 plans:
   - name: default
     description: This default plan deploys helm chart {{.Name}}
     free: True
     metadata: {}
-    parameters: []
+    parameters:
+	  - name: values.yaml
+	    required: true
+		type: string
+		display_type: textarea
+		default: {{.Values}}
 `
 
-type Values struct {
+type APB struct {
+	Version     string            `yaml:"version"`
+	Name        string            `yaml:"name"`
+	Description string            `yaml:"description"`
+	Bindable    bool              `yaml:"bindable"`
+	Async       string            `yaml:"async"`
+	Metadata    map[string]string `yaml:"metadata"`
+	Plans       []Plan            `yaml:"plans"`
+}
+
+type Plan struct {
+	Name        string                 `yaml:"name"`
+	Description string                 `yaml:"description"`
+	Free        bool                   `yaml:"free"`
+	Metadata    map[string]interface{} `yaml:"metadata"`
+	Parameters  []Parameter            `yaml:"parameters"`
+}
+
+type Parameter struct {
+	Name        string `yaml:"name"`
+	Title       string `yaml:"title"`
+	Type        string `yaml:"type"`
+	DisplayType string `yaml:"display_type"`
+	Default     string `yaml:"default"`
+}
+
+func NewAPB(v TValues) APB {
+	parameter := Parameter{"values", "Values", "string", "textarea", v.Values}
+	plan := Plan{"default", fmt.Sprintf("Deploys helm chart %s", v.Name), true, make(map[string]interface{}), []Parameter{parameter}}
+	apb := APB{
+		"1.0",
+		fmt.Sprintf("%s-apb", v.Name),
+		v.Description,
+		false,
+		"optional",
+		map[string]string{
+			"displayName":                    fmt.Sprintf("%s (helm bundle)", v.Name),
+			"console.openshift.io/iconClass": fmt.Sprintf("icon-%s", v.Name),
+		},
+		[]Plan{plan},
+	}
+	return apb
+}
+
+func (apb *APB) Yaml() ([]byte, error) {
+	return yaml.Marshal(apb)
+}
+
+const dockerfileTemplate string = `FROM mhrivnak/helm-bundle-base
+
+LABEL "com.redhat.apb.spec"=\
+""
+
+COPY {{.TarfileName}} /opt/chart.tgz
+
+ENTRYPOINT ["entrypoint.sh"]
+`
+
+type TValues struct {
 	Name        string
 	Description string
-	ImageURL    string
+	TarfileName string
+	Values      string
 }
 
 type Chart struct {
 	Description string
 	Name        string
-	Icon        string
 }
 
 func main() {
@@ -50,19 +113,18 @@ func main() {
 		Run: func(cmd *cobra.Command, args []string) {
 			filename := args[0]
 
-			t, err := template.New("bundle").Parse(bundleTemplate)
+			values, err := getTValues(filename)
 			if err != nil {
 				fmt.Println(err.Error())
-				panic("could not parse template")
+				panic("could not get values from helm chart")
 			}
 
-			values, err := getValues(filename)
+			err = writeApbYaml(values)
 			if err != nil {
 				fmt.Println(err.Error())
-				panic("could not get values from chart")
+				panic("could not render template")
 			}
-
-			err = t.Execute(os.Stdout, values)
+			err = writeDockerfile(values)
 			if err != nil {
 				fmt.Println(err.Error())
 				panic("could not render template")
@@ -77,44 +139,105 @@ func main() {
 	}
 }
 
-func getValues(filename string) (Values, error) {
+func writeApbYaml(v TValues) error {
+	/*
+		t, err := template.New("bundle").Parse(bundleTemplate)
+		if err != nil {
+			return err
+		}
+	*/
+	apb := NewAPB(v)
+
+	f, err := os.Create("apb.yml")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	data, err := apb.Yaml()
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err != nil {
+		return err
+	}
+	return nil
+
+	// write to a file instead
+	//return t.Execute(f, v)
+}
+
+func writeDockerfile(v TValues) error {
+	t, err := template.New("Dockerfile").Parse(dockerfileTemplate)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.Create("Dockerfile")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// write to a file instead
+	return t.Execute(f, v)
+}
+
+func getTValues(filename string) (TValues, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		return Values{}, err
+		return TValues{}, err
 	}
+	defer file.Close()
 
 	uncompressed, err := gzip.NewReader(file)
 	if err != nil {
-		return Values{}, err
+		return TValues{}, err
 	}
 
 	tr := tar.NewReader(uncompressed)
+	var chart Chart
+	var values string
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			return Values{}, errors.New("Chart.yaml not found in archive")
+			return TValues{}, errors.New("Chart.yaml not found in archive")
 		}
 		if err != nil {
-			return Values{}, err
+			return TValues{}, err
 		}
 
-		match, err := path.Match("*/Chart.yaml", hdr.Name)
+		chartMatch, err := path.Match("*/Chart.yaml", hdr.Name)
+		valuesMatch, err := path.Match("*/values.yaml", hdr.Name)
 		if err != nil {
-			return Values{}, err
+			return TValues{}, err
 		}
-		if match {
-			chart, err := parseChart(tr)
+		if chartMatch {
+			chart, err = parseChart(tr)
 			if err != nil {
-				return Values{}, err
+				return TValues{}, err
 			}
-			return Values{
-				Name:        chart.Name,
-				Description: chart.Description,
-				ImageURL:    chart.Icon,
-			}, nil
+		}
+		if valuesMatch {
+			data, err := ioutil.ReadAll(tr)
+			if err != nil {
+				return TValues{}, err
+			}
+			values = string(data)
+		}
+		if len(values) > 0 && len(chart.Name) > 0 {
+			break
 		}
 	}
-	return Values{}, errors.New("something went wrong")
+	if len(values) > 0 && len(chart.Name) > 0 {
+		return TValues{
+			Name:        chart.Name,
+			Description: chart.Description,
+			TarfileName: filename,
+			Values:      values,
+		}, nil
+	}
+	return TValues{}, errors.New("Could not find both Chart.yaml and values.yaml")
 }
 
 func parseChart(source io.Reader) (Chart, error) {
