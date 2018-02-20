@@ -14,27 +14,17 @@ import (
 	"text/template"
 )
 
-const bundleTemplate string = `version: 1.0
-name: {{.Name}}-apb
-description: {{.Description}}
-bindable: False
-async: optional
-metadata:
-  displayName: {{.Name}} (helm bundle)
-  console.openshift.io/iconClass: icon-{{.Name}}
-plans:
-  - name: default
-    description: This default plan deploys helm chart {{.Name}}
-    free: True
-    metadata: {}
-    parameters:
-	  - name: values.yaml
-	    required: true
-		type: string
-		display_type: textarea
-		default: {{.Values}}
+const dockerfileTemplate string = `FROM mhrivnak/helm-bundle-base
+
+LABEL "com.redhat.apb.spec"=\
+""
+
+COPY {{.TarfileName}} /opt/chart.tgz
+
+ENTRYPOINT ["entrypoint.sh"]
 `
 
+// APB represents an apb.yml file
 type APB struct {
 	Version     string            `yaml:"version"`
 	Name        string            `yaml:"name"`
@@ -61,45 +51,45 @@ type Parameter struct {
 	Default     string `yaml:"default"`
 }
 
-func NewAPB(v TValues) APB {
-	parameter := Parameter{"values", "Values", "string", "textarea", v.Values}
-	plan := Plan{"default", fmt.Sprintf("Deploys helm chart %s", v.Name), true, make(map[string]interface{}), []Parameter{parameter}}
-	apb := APB{
-		"1.0",
-		fmt.Sprintf("%s-apb", v.Name),
-		v.Description,
-		false,
-		"optional",
-		map[string]string{
-			"displayName":                    fmt.Sprintf("%s (helm bundle)", v.Name),
-			"console.openshift.io/iconClass": fmt.Sprintf("icon-%s", v.Name),
-		},
-		[]Plan{plan},
+func NewAPB(v TValues) *APB {
+	parameter := Parameter{
+		Name:        "values",
+		Title:       "Values",
+		Type:        "string",
+		DisplayType: "textarea",
+		Default:     v.Values,
 	}
-	return apb
+	plan := Plan{
+		Name:        "default",
+		Description: fmt.Sprintf("Deploys helm chart %s", v.Name),
+		Free:        true,
+		Metadata:    make(map[string]interface{}),
+		Parameters:  []Parameter{parameter},
+	}
+	apb := APB{
+		Version:     "1.0",
+		Name:        fmt.Sprintf("%s-apb", v.Name),
+		Description: v.Description,
+		Bindable:    false,
+		Async:       "optional",
+		Metadata: map[string]string{
+			"displayName":                    fmt.Sprintf("%s (helm bundle)", v.Name),
+			"console.openshift.io/iconClass": fmt.Sprintf("icon-%s", v.Name), // no guarantee it exists, but worth a shot
+		},
+		Plans: []Plan{plan},
+	}
+	return &apb
 }
 
-func (apb *APB) Yaml() ([]byte, error) {
-	return yaml.Marshal(apb)
-}
-
-const dockerfileTemplate string = `FROM mhrivnak/helm-bundle-base
-
-LABEL "com.redhat.apb.spec"=\
-""
-
-COPY {{.TarfileName}} /opt/chart.tgz
-
-ENTRYPOINT ["entrypoint.sh"]
-`
-
+// TValues holds data that will be used to create the Dockerfile and apb.yml
 type TValues struct {
 	Name        string
 	Description string
 	TarfileName string
-	Values      string
+	Values      string // the entire contents of the chart's values.yaml file
 }
 
+// Chart hold data that is parsed from a helm chart's Chart.yaml file.
 type Chart struct {
 	Description string
 	Name        string
@@ -140,31 +130,23 @@ func main() {
 }
 
 func writeApbYaml(v TValues) error {
-	/*
-		t, err := template.New("bundle").Parse(bundleTemplate)
-		if err != nil {
-			return err
-		}
-	*/
 	apb := NewAPB(v)
+	data, err := yaml.Marshal(apb)
+	if err != nil {
+		return err
+	}
 
 	f, err := os.Create("apb.yml")
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	data, err := apb.Yaml()
-	if err != nil {
-		return err
-	}
+
 	_, err = f.Write(data)
 	if err != nil {
 		return err
 	}
 	return nil
-
-	// write to a file instead
-	//return t.Execute(f, v)
 }
 
 func writeDockerfile(v TValues) error {
@@ -179,10 +161,11 @@ func writeDockerfile(v TValues) error {
 	}
 	defer f.Close()
 
-	// write to a file instead
 	return t.Execute(f, v)
 }
 
+// getTValues opens the helm chart tarball to 1) retrieve Chart.yaml so it can
+// be parsed, and 2) retrieve the entire contents of values.yaml.
 func getTValues(filename string) (TValues, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -240,6 +223,8 @@ func getTValues(filename string) (TValues, error) {
 	return TValues{}, errors.New("Could not find both Chart.yaml and values.yaml")
 }
 
+// parseChart parses the Chart.yaml file for data that is needed when creating
+// a service bundle.
 func parseChart(source io.Reader) (Chart, error) {
 	c := Chart{}
 
