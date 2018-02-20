@@ -14,7 +14,7 @@ import (
 	"text/template"
 )
 
-const dockerfileTemplate string = `FROM mhrivnak/helm-bundle-base
+const dockerfileTemplate string = `FROM ansibleplaybookbundle/helm-bundle-base
 
 LABEL "com.redhat.apb.spec"=\
 ""
