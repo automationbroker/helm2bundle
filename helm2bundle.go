@@ -96,11 +96,26 @@ type Chart struct {
 }
 
 func main() {
+	var force bool
+
 	var rootCmd = &cobra.Command{
 		Use:   "helm2bundle CHARTFILE",
 		Short: "Packages a helm chart as a Service Bundle",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
+			if force == false {
+				exists, err := fileExists()
+				if err != nil {
+					fmt.Println(err.Error())
+					fmt.Println("could not get values from helm chart")
+					os.Exit(1)
+				}
+				if exists {
+					fmt.Println("use --force to overwrite existing Dockerfile and/or apb.yml")
+					os.Exit(1)
+				}
+			}
+
 			filename := args[0]
 
 			values, err := getTValues(filename)
@@ -122,11 +137,27 @@ func main() {
 		},
 	}
 
+	rootCmd.PersistentFlags().BoolVarP(&force, "force", "f", false, "force overwrite of existing files")
+
 	err := rootCmd.Execute()
 	if err != nil {
 		fmt.Println(err.Error())
 		panic("could not execute command")
 	}
+}
+
+// fileExists returns true if either apb.yml or Dockerfile exist in the working directory, else false
+func fileExists() (bool, error) {
+	for _, filename := range []string{"apb.yml", "Dockerfile"} {
+		_, err := os.Stat(filename)
+		if err == nil {
+			return true, nil
+		}
+		if !os.IsNotExist(err) {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func writeApbYaml(v TValues) error {
