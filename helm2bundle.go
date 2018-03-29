@@ -5,13 +5,14 @@ import (
 	"compress/gzip"
 	"errors"
 	"fmt"
-	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v2"
 	"io"
 	"io/ioutil"
 	"os"
 	"path"
 	"text/template"
+
+	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v2"
 )
 
 const dockerfileTemplate string = `FROM ansibleplaybookbundle/helm-bundle-base
@@ -38,6 +39,7 @@ type APB struct {
 	Plans       []Plan            `yaml:"plans"`
 }
 
+// Plan represents a Plan within an APB
 type Plan struct {
 	Name        string                 `yaml:"name"`
 	Description string                 `yaml:"description"`
@@ -46,6 +48,7 @@ type Plan struct {
 	Parameters  []Parameter            `yaml:"parameters"`
 }
 
+// Parameter represents a Parameter within a Plan
 type Parameter struct {
 	Name        string `yaml:"name"`
 	Title       string `yaml:"title"`
@@ -110,41 +113,7 @@ func main() {
 		Short: "Packages a helm chart as a Service Bundle",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			if forceArg == false {
-				// fail if one of the files already exists
-				exists, err := fileExists()
-				if err != nil {
-					fmt.Println(err.Error())
-					fmt.Println("could not get values from helm chart")
-					os.Exit(1)
-				}
-				if exists {
-					fmt.Printf("use --force to overwrite existing %s and/or %s\n", dockerfile, apbYml)
-					os.Exit(1)
-				}
-			}
-
-			filename := args[0]
-
-			values, err := getTarValues(filename)
-			if err != nil {
-				fmt.Println(err.Error())
-				fmt.Println("could not get values from helm chart")
-				os.Exit(1)
-			}
-
-			err = writeApbYaml(values)
-			if err != nil {
-				fmt.Println(err.Error())
-				fmt.Println("could not render template")
-				os.Exit(1)
-			}
-			err = writeDockerfile(values)
-			if err != nil {
-				fmt.Println(err.Error())
-				fmt.Println("could not render template")
-				os.Exit(1)
-			}
+			run(forceArg, args[0])
 		},
 	}
 
@@ -158,8 +127,47 @@ func main() {
 	}
 }
 
-// fileExists returns true if either apb.yml or Dockerfile exist in the working
-// directory, else false
+// run does all of the real work. `force` indicates if existing files should be
+// overwritten, and `filename` is the name of the chart file in the working
+// directory.
+func run(force bool, filename string) {
+	if force == false {
+		// fail if one of the files already exists
+		exists, err := fileExists()
+		if err != nil {
+			fmt.Println(err.Error())
+			fmt.Println("could not get values from helm chart")
+			os.Exit(1)
+		}
+		if exists {
+			fmt.Printf("use --force to overwrite existing %s and/or %s\n", dockerfile, apbYml)
+			os.Exit(1)
+		}
+	}
+
+	values, err := getTarValues(filename)
+	if err != nil {
+		fmt.Println(err.Error())
+		fmt.Println("could not get values from helm chart")
+		os.Exit(1)
+	}
+
+	err = writeApbYaml(values)
+	if err != nil {
+		fmt.Println(err.Error())
+		fmt.Println("could not render template")
+		os.Exit(1)
+	}
+	err = writeDockerfile(values)
+	if err != nil {
+		fmt.Println(err.Error())
+		fmt.Println("could not render template")
+		os.Exit(1)
+	}
+}
+
+// fileExists returns true if either apb.yml or Dockerfile exists in the
+// working directory, else false
 func fileExists() (bool, error) {
 	for _, filename := range []string{apbYml, dockerfile} {
 		_, err := os.Stat(filename)
