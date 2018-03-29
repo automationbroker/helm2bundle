@@ -81,8 +81,8 @@ func NewAPB(v TarValues) *APB {
 		Bindable:    false,
 		Async:       "optional",
 		Metadata: map[string]string{
-			"displayName":                    fmt.Sprintf("%s (helm bundle)", v.Name),
-			"console.openshift.io/iconClass": fmt.Sprintf("icon-%s", v.Name), // no guarantee it exists, but worth a shot
+			"displayName": fmt.Sprintf("%s (helm bundle)", v.Name),
+			"imageUrl":    v.Icon,
 		},
 		Plans: []Plan{plan},
 	}
@@ -93,6 +93,7 @@ func NewAPB(v TarValues) *APB {
 type TarValues struct {
 	Name        string
 	Description string
+	Icon        string
 	TarfileName string
 	Values      string // the entire contents of the chart's values.yaml file
 }
@@ -101,6 +102,7 @@ type TarValues struct {
 type Chart struct {
 	Description string
 	Name        string
+	Icon        string
 }
 
 func main() {
@@ -275,6 +277,7 @@ func getTarValues(filename string) (TarValues, error) {
 		return TarValues{
 			Name:        chart.Name,
 			Description: chart.Description,
+			Icon:        chart.Icon,
 			TarfileName: filename,
 			Values:      values,
 		}, nil
